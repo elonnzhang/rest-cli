@@ -1,0 +1,26 @@
+### Get my IP
+GET https://httpbin.org/ip
+Accept: application/json
+
+###
+
+### Get headers
+GET https://httpbin.org/headers
+Accept: application/json
+
+###
+
+### Post JSON
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+  "name": "rest-cli",
+  "version": "1.0"
+}
+
+###
+
+### Delay (slow endpoint)
+GET https://httpbin.org/delay/1
+Accept: application/json

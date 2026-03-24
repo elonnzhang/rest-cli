@@ -1,0 +1,53 @@
+@test = test
+### GET request with a header
+GET https://examples.http-client.intellij.net/ip
+Accept: application/json
+
+###
+GET https://examples.http-client.intellij.net/get
+    ?generated-in=IntelliJ IDEA
+### GET request with parameter
+GET https://examples.http-client.intellij.net/get?show_env=1
+Accept: application/json
+
+### GET request with environment variables
+//TIP <p>Press <shortcut actionId="GotoDeclaration"/> on <b>{{show_env}}</b> to navigate to declaration</p>
+//TIP <p>Putting <i>scheme:// + host</i> to <b>{{host}}</b> allows switching schemes between different environments</p>
+@host= https://examples.http-client.intellij.net
+@show_env= 1
+GET {{host}}/get?show_env={{show_env}}&test={{test}}
+Accept: application/json
+
+### GET request with disabled redirects
+# @no-redirect
+GET https://examples.http-client.intellij.net/status/301
+
+### GET request without cookies
+# @no-cookie-jar
+GET https://examples.http-client.intellij.net/cookies
+
+### The request will be sent as is, without encoding
+# @no-auto-encoding
+GET https://examples.http-client.intellij.net/anything?value=@+$!
+
+### GET request with cookie passed through headers
+GET https://examples.http-client.intellij.net/cookies
+Cookie: theme=darcula; last_searched_location=IJburg
+
+### GET request with dynamic variables
+GET https://examples.http-client.intellij.net/anything?id={{$random.uuid}}&ts={{$timestamp}}
+
+### Define own filename for saved response file
+GET https://examples.http-client.intellij.net/get
+
+//TIP File will be named <i>my-response.json</i> instead of default name
+>> {{$historyFolder}}/my-response.json
+
+### Force own filename for saved response file
+GET https://examples.http-client.intellij.net/get
+
+//TIP If there is already a <i>my-forced-response.json</i>, HTTP Client will override it
+>>! {{$historyFolder}}/my-forced-response.json
+
+### GET request with HTTP/2 protocol
+GET https://examples.http-client.intellij.net/get HTTP/2
