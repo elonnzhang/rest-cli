@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -48,6 +49,34 @@ func MergeEnv(base, override map[string]string) map[string]string {
 // Returns an error if circular references are detected.
 func Substitute(s string, env map[string]string) (string, error) {
 	return substitute(s, env, nil)
+}
+
+// jetbrainsVarRe matches $VARNAME (JetBrains HTTP client syntax).
+// VARNAME must start with a letter or underscore, followed by letters, digits, or underscores.
+var jetbrainsVarRe = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// SubstituteJetBrains replaces $VAR placeholders (JetBrains HTTP client syntax) in s
+// with values from env. Only substitutes variables that exist in env —
+// unknown $VAR patterns are left as-is. Safe to use in JSON bodies.
+func SubstituteJetBrains(s string, env map[string]string) string {
+	return jetbrainsVarRe.ReplaceAllStringFunc(s, func(match string) string {
+		name := match[1:] // strip leading '$'
+		if val, ok := env[name]; ok {
+			return val
+		}
+		return match
+	})
+}
+
+// SubstituteAll applies {{VAR}} substitution first, then $VAR substitution.
+// Returns (string, error) to propagate circular-reference errors from the
+// {{VAR}} pass. The $VAR pass never errors.
+func SubstituteAll(s string, env map[string]string) (string, error) {
+	s, err := Substitute(s, env)
+	if err != nil {
+		return s, err
+	}
+	return SubstituteJetBrains(s, env), nil
 }
 
 func substitute(s string, env map[string]string, visited map[string]bool) (string, error) {

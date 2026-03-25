@@ -121,6 +121,124 @@ func TestSubstitute(t *testing.T) {
 	}
 }
 
+func TestSubstituteJetBrains(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		env   map[string]string
+		want  string
+	}{
+		{
+			name:  "basic substitution",
+			input: "Bearer $TOKEN",
+			env:   map[string]string{"TOKEN": "abc123"},
+			want:  "Bearer abc123",
+		},
+		{
+			name:  "multiple vars",
+			input: "$HOST/$PATH",
+			env:   map[string]string{"HOST": "https://api.example.com", "PATH": "users"},
+			want:  "https://api.example.com/users",
+		},
+		{
+			name:  "unknown var left as-is",
+			input: `{"key": "$MISSING"}`,
+			env:   map[string]string{},
+			want:  `{"key": "$MISSING"}`,
+		},
+		{
+			name:  "underscore in var name",
+			input: "key=$API_KEY",
+			env:   map[string]string{"API_KEY": "secret"},
+			want:  "key=secret",
+		},
+		{
+			name:  "dollar-digit not substituted",
+			input: "$123abc",
+			env:   map[string]string{"123abc": "x"},
+			want:  "$123abc",
+		},
+		{
+			name:  "lone dollar not substituted",
+			input: "price: $",
+			env:   map[string]string{},
+			want:  "price: $",
+		},
+		{
+			name:  "no dollar sign — unchanged",
+			input: "no vars here",
+			env:   map[string]string{"FOO": "bar"},
+			want:  "no vars here",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parser.SubstituteJetBrains(tt.input, tt.env)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubstituteAll(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		env     map[string]string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "curly brace syntax resolved",
+			input: "Bearer {{TOKEN}}",
+			env:   map[string]string{"TOKEN": "abc"},
+			want:  "Bearer abc",
+		},
+		{
+			name:  "dollar syntax resolved",
+			input: "Bearer $TOKEN",
+			env:   map[string]string{"TOKEN": "abc"},
+			want:  "Bearer abc",
+		},
+		{
+			name:  "both syntaxes in one string",
+			input: "{{HOST}}/$PATH",
+			env:   map[string]string{"HOST": "https://api.example.com", "PATH": "users"},
+			want:  "https://api.example.com/users",
+		},
+		{
+			name:  "unknown vars left as-is",
+			input: "{{MISSING}} and $ALSO_MISSING",
+			env:   map[string]string{},
+			want:  "{{MISSING}} and $ALSO_MISSING",
+		},
+		{
+			name:    "circular reference in curly brace pass returns error",
+			input:   "{{FOO}}",
+			env:     map[string]string{"FOO": "{{BAR}}", "BAR": "{{FOO}}"},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parser.SubstituteAll(tt.input, tt.env)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMergeEnv(t *testing.T) {
 	base := map[string]string{"A": "base-a", "B": "base-b"}
 	override := map[string]string{"B": "override-b", "C": "new-c"}
