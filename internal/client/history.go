@@ -1,6 +1,9 @@
 package client
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -39,6 +42,48 @@ func (h *History) Add(e HistoryEntry) {
 	if h.count < h.capacity {
 		h.count++
 	}
+}
+
+// Save writes all history entries to path as a JSON array (oldest first).
+// Creates the parent directory if it does not exist.
+// Uses an atomic write (temp file + rename) to avoid partial writes.
+func (h *History) Save(path string) error {
+	entries := h.Entries()
+	// Entries() returns most-recent first. Reverse to oldest-first for stable serialization.
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadHistory reads a history file from path and returns a History with the given capacity.
+// If the file is missing or contains invalid JSON, returns a fresh empty History with nil error.
+func LoadHistory(path string, cap int) (*History, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return NewHistory(cap), nil
+	}
+	var entries []HistoryEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return NewHistory(cap), nil
+	}
+	h := NewHistory(cap)
+	// entries is oldest-first; Add() each in order to reconstruct the ring buffer correctly.
+	for _, e := range entries {
+		h.Add(e)
+	}
+	return h, nil
 }
 
 // Entries returns all entries in reverse chronological order (most recent first).

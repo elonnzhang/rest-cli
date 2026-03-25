@@ -1,11 +1,69 @@
 package client_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/elonnzhang/rest-cli/internal/client"
 )
+
+func TestHistorySaveLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.json")
+
+	h := client.NewHistory(10)
+	h.Add(client.HistoryEntry{Method: "GET", URL: "https://a.com", StatusCode: 200, Duration: time.Millisecond})
+	h.Add(client.HistoryEntry{Method: "POST", URL: "https://b.com", StatusCode: 201, Duration: 2 * time.Millisecond})
+
+	if err := h.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := client.LoadHistory(path, 10)
+	if err != nil {
+		t.Fatalf("LoadHistory: %v", err)
+	}
+
+	entries := loaded.Entries()
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+	// Most-recent first (POST was added last)
+	if entries[0].URL != "https://b.com" || entries[0].Method != "POST" {
+		t.Errorf("entries[0] = %+v, want POST https://b.com", entries[0])
+	}
+	if entries[1].URL != "https://a.com" || entries[1].Method != "GET" {
+		t.Errorf("entries[1] = %+v, want GET https://a.com", entries[1])
+	}
+}
+
+func TestHistoryLoadMissing(t *testing.T) {
+	h, err := client.LoadHistory("/nonexistent/path/history.json", 10)
+	if err != nil {
+		t.Fatalf("LoadHistory missing: unexpected error: %v", err)
+	}
+	if len(h.Entries()) != 0 {
+		t.Errorf("expected empty history, got %d entries", len(h.Entries()))
+	}
+}
+
+func TestHistoryLoadCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.json")
+	if err := os.WriteFile(path, []byte("not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := client.LoadHistory(path, 10)
+	if err != nil {
+		t.Fatalf("LoadHistory corrupt: unexpected error: %v", err)
+	}
+	if len(h.Entries()) != 0 {
+		t.Errorf("expected empty history, got %d entries", len(h.Entries()))
+	}
+}
 
 func TestHistory(t *testing.T) {
 	t.Run("records entries and retrieves them in reverse order", func(t *testing.T) {
