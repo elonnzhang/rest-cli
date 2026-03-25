@@ -83,6 +83,8 @@ func LoadHistory(path string, cap int) (*History, error) {
 	}
 	var entries []HistoryEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
+		// Preserve the corrupt file as .corrupt so it can be recovered manually.
+		os.Rename(path, path+".corrupt") //nolint:errcheck // best-effort
 		return NewHistory(cap), nil
 	}
 	h := NewHistory(cap)

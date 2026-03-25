@@ -71,6 +71,10 @@ func SubstituteJetBrains(s string, env map[string]string) string {
 // SubstituteAll applies {{VAR}} substitution first, then $VAR substitution.
 // Returns (string, error) to propagate circular-reference errors from the
 // {{VAR}} pass. The $VAR pass never errors.
+//
+// Note: the two passes chain — if a {{VAR}} value contains a $OTHER token
+// that is also defined in env, $OTHER will be substituted in the second pass.
+// This matches JetBrains HTTP client semantics and is intentional.
 func SubstituteAll(s string, env map[string]string) (string, error) {
 	s, err := Substitute(s, env)
 	if err != nil {
