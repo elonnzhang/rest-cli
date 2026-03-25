@@ -90,13 +90,13 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 	env := loadEnvChain(filepath.Dir(httpFile), *envFile, stderr)
 
 	// --- Substitute variables ---
-	req.URL, err = parser.Substitute(req.URL, env)
+	req.URL, err = parser.SubstituteAll(req.URL, env)
 	if err != nil {
 		fmt.Fprintf(stderr, "env substitution error: %v\n", err)
 		return 1
 	}
 	for k, v := range req.Headers {
-		subbed, serr := parser.Substitute(v, env)
+		subbed, serr := parser.SubstituteAll(v, env)
 		if serr != nil {
 			fmt.Fprintf(stderr, "env substitution error in header %q: %v\n", k, serr)
 			return 1
@@ -104,7 +104,7 @@ func runCmd(args []string, stdout, stderr io.Writer) int {
 		req.Headers[k] = subbed
 	}
 	if req.Body != "" {
-		req.Body, err = parser.Substitute(req.Body, env)
+		req.Body, err = parser.SubstituteAll(req.Body, env)
 		if err != nil {
 			fmt.Fprintf(stderr, "env substitution error in body: %v\n", err)
 			return 1

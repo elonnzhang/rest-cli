@@ -594,11 +594,11 @@ func (m Model) executeSelected() (tea.Model, tea.Cmd) {
 		subEnv[k] = v
 	}
 	// Substitute env vars at execution time (not parse time)
-	req.URL, _ = parser.Substitute(req.URL, subEnv)
+	req.URL, _ = parser.SubstituteAll(req.URL, subEnv)
 	for k, v := range req.Headers {
-		req.Headers[k], _ = parser.Substitute(v, subEnv)
+		req.Headers[k], _ = parser.SubstituteAll(v, subEnv)
 	}
-	req.Body, _ = parser.Substitute(req.Body, subEnv)
+	req.Body, _ = parser.SubstituteAll(req.Body, subEnv)
 
 	key := fmt.Sprintf("%s:%d", item.filePath, idx)
 	m.selectedReqKey = key
