@@ -227,7 +227,7 @@ func historyPath() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".rest-cli-history.json"
+		return filepath.Join(os.TempDir(), "rest-cli-history.json")
 	}
 	if runtime.GOOS == "darwin" {
 		if cfg, err := os.UserConfigDir(); err == nil {

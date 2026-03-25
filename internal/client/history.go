@@ -64,12 +64,19 @@ func (h *History) Save(path string) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // clean up orphaned temp file on rename failure
+		return err
+	}
+	return nil
 }
 
 // LoadHistory reads a history file from path and returns a History with the given capacity.
 // If the file is missing or contains invalid JSON, returns a fresh empty History with nil error.
 func LoadHistory(path string, cap int) (*History, error) {
+	if cap <= 0 {
+		cap = 1
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return NewHistory(cap), nil
