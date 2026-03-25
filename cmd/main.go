@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -179,14 +180,24 @@ func runTUI(args []string, stderr io.Writer) int {
 
 	env := loadEnvChain(dir, *envFile, stderr)
 
+	histPath := historyPath()
+	history, _ := client.LoadHistory(histPath, 100) // missing/corrupt → fresh history
+
 	m := tui.New(tui.Config{
-		Dir: dir,
-		Env: env,
+		Dir:     dir,
+		Env:     env,
+		History: history,
 	})
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
+	_, runErr := p.Run()
+
+	if err := history.Save(histPath); err != nil {
+		fmt.Fprintf(stderr, "warning: could not save history: %v\n", err)
+	}
+
+	if runErr != nil {
+		fmt.Fprintf(stderr, "error: %v\n", runErr)
 		return 1
 	}
 	return 0
@@ -206,6 +217,24 @@ func loadEnvChain(dir, extraEnvFile string, stderr io.Writer) map[string]string 
 		env = parser.MergeEnv(env, m)
 	}
 	return env
+}
+
+// historyPath returns the platform-appropriate path for the history file.
+// Priority: $XDG_DATA_HOME > macOS Application Support > ~/.local/share > fallback.
+func historyPath() string {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "rest-cli", "history.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".rest-cli-history.json"
+	}
+	if runtime.GOOS == "darwin" {
+		if cfg, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(cfg, "rest-cli", "history.json")
+		}
+	}
+	return filepath.Join(home, ".local", "share", "rest-cli", "history.json")
 }
 
 // readEnvFile reads and parses a .env file. Returns empty map if the file
