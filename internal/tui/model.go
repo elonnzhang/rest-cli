@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,8 +58,9 @@ type FilesDiscoveredMsg struct {
 
 // editorClosedMsg is sent after the external editor process exits.
 type editorClosedMsg struct {
-	path string
-	err  error
+	path     string
+	err      error
+	openedAt time.Time // recorded just before the editor was launched
 }
 
 // Config holds the startup configuration for the TUI.
@@ -106,6 +109,10 @@ type Model struct {
 	selectedFile   string // non-empty when a Level-1 file is focused → show request list
 	selectedReqKey string // "path:idx" key used to detect request navigation
 
+	// right-pane scroll state
+	reqScroll  int // scroll offset for the request body pane
+	respScroll int // scroll offset for the response body pane
+
 	// env
 	env map[string]string
 
@@ -113,8 +120,10 @@ type Model struct {
 	dir string
 }
 
-const defaultPaneW = 30
-const defaultReqPaneH = 9
+const (
+	defaultPaneW    = 30
+	defaultReqPaneH = 9
+)
 
 // New creates a Model with the given config.
 func New(cfg Config) Model {
@@ -198,13 +207,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case editorClosedMsg:
-		// Reload the file's cached requests after editing.
+		if msg.err != nil {
+			// Editor binary not found or failed to launch.
+			m.selectedErr = msg.err
+			return m, nil
+		}
+		// Always invalidate and re-parse regardless of expansion state.
 		delete(m.fileReqs, msg.path)
-		if m.expanded[msg.path] {
-			reqs, _ := parseFile(msg.path)
-			m.fileReqs[msg.path] = reqs
+		reqs, parseErr := parseFile(msg.path)
+		if parseErr != nil {
+			m.selectedErr = parseErr
+			return m, nil
+		}
+		m.fileReqs[msg.path] = reqs
+		// Clamp cursor in case requests were deleted.
+		if items := m.flatTree(); m.cursor >= len(items) {
+			if len(items) > 0 {
+				m.cursor = len(items) - 1
+			} else {
+				m.cursor = 0
+			}
 		}
 		m.loadSelectedRequest()
+		// Only auto-rerun if the file was actually modified.
+		if stat, statErr := os.Stat(msg.path); statErr == nil && stat.ModTime().After(msg.openedAt) {
+			return m.executeSelected()
+		}
 		return m, nil
 
 	case tea.MouseMsg:
@@ -298,6 +326,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.KeyPgDown:
+		pageH := m.respBodyH()
+		maxScroll := max(0, m.respContentLines()-pageH)
+		m.respScroll = min(m.respScroll+pageH, maxScroll)
+		return m, nil
+
+	case tea.KeyPgUp:
+		m.respScroll -= m.respBodyH()
+		if m.respScroll < 0 {
+			m.respScroll = 0
+		}
+		return m, nil
+
 	case tea.KeyEnter:
 		items := m.flatTree()
 		if len(items) == 0 || m.cursor >= len(items) {
@@ -373,10 +414,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.MouseLeft:
-		// In Bubble Tea, holding a button and moving fires repeated MouseLeft
-		// events (not MouseMotion). Apply drag update if already dragging.
+	switch {
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+		// In Bubble Tea, holding a button and moving fires repeated press
+		// events. Apply drag update if already dragging.
 		if m.dragging != dragNone {
 			return m.applyDrag(msg.X, msg.Y)
 		}
@@ -410,26 +451,53 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case tea.MouseMotion:
-		// Fallback: also handle motion events (fires when moving without button)
+	case msg.Action == tea.MouseActionMotion:
+		// Handle motion events (fires when moving without button held)
 		if m.dragging != dragNone {
 			return m.applyDrag(msg.X, msg.Y)
 		}
 
-	case tea.MouseRelease:
+	case msg.Action == tea.MouseActionRelease:
 		m.dragging = dragNone
 
-	case tea.MouseWheelUp:
-		if msg.X < m.paneW && m.sidebarScroll > 0 {
-			m.sidebarScroll--
+	case msg.Button == tea.MouseButtonWheelUp:
+		if msg.X < m.paneW {
+			// Sidebar
+			if m.sidebarScroll > 0 {
+				m.sidebarScroll--
+			}
+		} else {
+			// Right pane: request section (above separator) vs response section
+			if msg.Y <= m.reqPaneH {
+				if m.reqScroll > 0 {
+					m.reqScroll--
+				}
+			} else {
+				if m.respScroll > 0 {
+					m.respScroll--
+				}
+			}
 		}
 
-	case tea.MouseWheelDown:
+	case msg.Button == tea.MouseButtonWheelDown:
 		if msg.X < m.paneW {
+			// Sidebar
 			items := m.flatTree()
 			listH := m.sidebarListH()
-			if max := len(items) - listH; max > 0 && m.sidebarScroll < max {
+			if bound := len(items) - listH; bound > 0 && m.sidebarScroll < bound {
 				m.sidebarScroll++
+			}
+		} else {
+			// Right pane
+			if msg.Y <= m.reqPaneH {
+				reqBodyH := m.reqPaneH - 1
+				if m.reqScroll < max(0, m.reqContentLines()-reqBodyH) {
+					m.reqScroll++
+				}
+			} else {
+				if m.respScroll < max(0, m.respContentLines()-m.respBodyH()) {
+					m.respScroll++
+				}
 			}
 		}
 	}
@@ -548,6 +616,10 @@ func (m *Model) loadSelectedRequest() {
 		return
 	}
 	newKey := fmt.Sprintf("%s:%d", item.filePath, item.reqIdx)
+	if newKey != m.selectedReqKey {
+		m.reqScroll = 0
+		m.respScroll = 0
+	}
 	m.selectedReqKey = newKey
 	req := reqs[item.reqIdx]
 	m.selected = &req
@@ -587,12 +659,8 @@ func (m Model) executeSelected() (tea.Model, tea.Cmd) {
 
 	// Merge global env with request-local @var declarations (request vars win).
 	subEnv := make(map[string]string, len(m.env)+len(req.Vars))
-	for k, v := range m.env {
-		subEnv[k] = v
-	}
-	for k, v := range req.Vars {
-		subEnv[k] = v
-	}
+	maps.Copy(subEnv, m.env)
+	maps.Copy(subEnv, req.Vars)
 	// Substitute env vars at execution time (not parse time)
 	req.URL, _ = parser.SubstituteAll(req.URL, subEnv)
 	for k, v := range req.Headers {
@@ -630,16 +698,64 @@ func (m Model) openEditor() (tea.Model, tea.Cmd) {
 			line = reqs[idx].Line
 		}
 	}
-	return m, editFile(item.filePath, line)
+	return m, editFile(item.filePath, line, time.Now())
 }
 
 // sidebarListH returns the number of visible rows available for tree items.
 func (m Model) sidebarListH() int {
-	h := m.height - 5
-	if h < 1 {
-		h = 1
+	return max(1, m.height-5)
+}
+
+// respBodyH returns the visible height of the response body pane.
+// Used as the page size for PgUp/PgDn scrolling.
+// Formula: contentH(height-1) - reqPaneH - 1(sep) - 1(respHeader)
+func (m Model) respBodyH() int {
+	return max(1, m.height-m.reqPaneH-3)
+}
+
+// respContentLines counts the rendered lines in the response body content.
+// Used to clamp respScroll so we never scroll past the last line.
+func (m Model) respContentLines() int {
+	resp := m.responses[m.selectedReqKey]
+	respErr := m.errors[m.selectedReqKey]
+	switch {
+	case m.inFlight[m.selectedReqKey], respErr != nil:
+		return 1
+	case resp != nil:
+		content := prettyJSON(resp.Body)
+		if resp.Truncated {
+			content += "\n..."
+		}
+		return len(strings.Split(content, "\n"))
+	default:
+		return 1
 	}
-	return h
+}
+
+// reqContentLines estimates the rendered lines in the request body content.
+// Used to clamp reqScroll so we never scroll past the last line.
+func (m Model) reqContentLines() int {
+	if m.selectedErr != nil || m.selected == nil {
+		return 1
+	}
+	// Count: variable lines + separator + method+URL + headers + blank + body lines
+	parts := make([]string, 0, 2+len(m.selected.Headers))
+	parts = append(parts, m.selected.URL, m.selected.Body)
+	for _, v := range m.selected.Headers {
+		parts = append(parts, v)
+	}
+	usedVars := dedupeNames(extractVarNames(strings.Join(parts, " ")))
+	n := len(usedVars)
+	if len(usedVars) > 0 {
+		n++ // separator line after variables
+	}
+	n++ // method + URL line
+	n += len(m.selected.Headers)
+	if m.selected.Body != "" {
+		n++ // blank line before body
+		n += strings.Count(m.selected.Body, "\n") + 1
+	}
+	return n
 }
 
 // clampScroll adjusts sidebarScroll so the cursor is always visible.
@@ -660,20 +776,14 @@ func (m *Model) clampScroll() {
 func (m Model) applyDrag(x, y int) (tea.Model, tea.Cmd) {
 	switch m.dragging {
 	case dragSidebar:
-		newW := x
-		if newW < 15 {
-			newW = 15
-		}
+		newW := max(15, x)
 		if m.width > 20 && newW > m.width-20 {
 			newW = m.width - 20
 		}
 		m.paneW = newW
 		m.clampScroll()
 	case dragReqSep:
-		newH := y
-		if newH < 3 {
-			newH = 3
-		}
+		newH := max(3, y)
 		if m.height > 8 && newH > m.height-8 {
 			newH = m.height - 8
 		}
@@ -730,21 +840,36 @@ func executeRequest(key string, req parser.Request, ctx context.Context) tea.Cmd
 	}
 }
 
-// editFile opens a .http file in $EDITOR at the given line (falls back to vi).
-// Most terminal editors (vi, vim, nvim, nano, emacs) accept +N to jump to line N.
-func editFile(path string, line int) tea.Cmd {
-	editor := os.Getenv("EDITOR")
+// buildEditorArgs resolves the editor binary and constructs the argument list.
+// It splits a multi-word $EDITOR (e.g. "code --wait") into binary + flags, then
+// appends the optional +N line-jump and the file path.
+// Note: VS Code ignores the +N argument; the file still opens correctly.
+func buildEditorArgs(editor, path string, line int) (string, []string) {
 	if editor == "" {
 		editor = "vi"
 	}
-	args := []string{}
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		parts = []string{"vi"}
+	}
+	args := make([]string, 0, len(parts)+2)
+	args = append(args, parts[1:]...) // any flags bundled in $EDITOR (e.g. --wait)
 	if line > 1 {
+		// line > 1 guard: most editors default to line 1 on open, so skip redundant +1.
 		args = append(args, fmt.Sprintf("+%d", line))
 	}
 	args = append(args, path)
-	c := exec.Command(editor, args...)
+	return parts[0], args
+}
+
+// editFile opens a .http file in $EDITOR at the given line (falls back to vi).
+// openedAt is captured just before launching so the closed handler can detect
+// whether the file was actually modified (mtime comparison).
+func editFile(path string, line int, openedAt time.Time) tea.Cmd {
+	binary, args := buildEditorArgs(os.Getenv("EDITOR"), path, line)
+	c := exec.Command(binary, args...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return editorClosedMsg{path: path, err: err}
+		return editorClosedMsg{path: path, err: err, openedAt: openedAt}
 	})
 }
 

@@ -401,7 +401,7 @@ func (m Model) reqBody(w, h int) []string {
 	}
 
 	rendered := style.Render(content)
-	return splitToLines(rendered, w, h)
+	return splitToLines(rendered, w, h, m.reqScroll)
 }
 
 func (m Model) respHeader(w int) string {
@@ -418,6 +418,10 @@ func (m Model) respHeader(w int) string {
 		right = httpStatusStyle(resp.StatusCode, resp.Status) +
 			"  " + lipgloss.NewStyle().Foreground(cGray).Render(
 			resp.Duration.Round(1e6).String()+" · "+byteSize(len(resp.Body)))
+	}
+	if m.respScroll > 0 {
+		scrollNote := lipgloss.NewStyle().Foreground(cDim).Render(fmt.Sprintf(" ↑%d", m.respScroll))
+		right = scrollNote + "  " + right
 	}
 	titleW := lipgloss.Width(title)
 	rightW := lipgloss.Width(right)
@@ -451,7 +455,7 @@ func (m Model) respBody(w, h int) []string {
 	}
 
 	rendered := style.Render(content)
-	return splitToLines(rendered, w, h)
+	return splitToLines(rendered, w, h, m.respScroll)
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -473,6 +477,7 @@ func (m Model) statusBar() string {
 		bold("/") + dim(" search") + sp(2) +
 		bold("esc") + dim(" clear") + sp(2) +
 		bold("e") + dim(" edit") + sp(2) +
+		bold("PgUp/Dn") + dim(" scroll") + sp(2) +
 		bold("[]{}") + dim(" resize") + sp(2) +
 		bold("r") + dim(" refresh") + sp(2) +
 		bold("q") + dim(" quit")
@@ -558,13 +563,26 @@ func highlightVars(s string, base lipgloss.Style) string {
 	return b.String()
 }
 
-// splitToLines splits a rendered string into exactly h lines, each w wide.
-func splitToLines(rendered string, w, h int) []string {
+// splitToLines splits a rendered string into exactly h lines, each w wide,
+// starting at scroll offset (clamped to valid range).
+func splitToLines(rendered string, w, h, scroll int) []string {
 	raw := strings.Split(rendered, "\n")
+	// Clamp scroll so we never go past the last line
+	if maxScroll := len(raw) - h; scroll > maxScroll {
+		if maxScroll > 0 {
+			scroll = maxScroll
+		} else {
+			scroll = 0
+		}
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
 	lines := make([]string, h)
 	for i := 0; i < h; i++ {
-		if i < len(raw) {
-			lines[i] = line(w, raw[i])
+		idx := scroll + i
+		if idx < len(raw) {
+			lines[i] = line(w, raw[idx])
 		} else {
 			lines[i] = line(w, "")
 		}
